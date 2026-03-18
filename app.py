@@ -1,55 +1,48 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, redirect
 import csv
 import io
-import requests
 
 app = Flask(__name__)
 
-# Replace with your real Mouser API key
-MOUSER_API_KEY = "3f8661d7-e599-45f7-a572-72280fd2f09a"
-
-@app.route("/")
+@app.route("/", methods=["GET", "POST"])
 def index():
-    return render_template("index.html")
+    bom_data = []
+    total_bom_cost = 0
 
-@app.route("/export_csv", methods=["POST"])
-def export_csv():
-    data = request.json.get("bom", [])
+    if request.method == "POST":
+        file = request.files.get("csv_file")
 
-    proxy = io.StringIO()
-    writer = csv.writer(proxy)
-    writer.writerow(["Component", "Part Number", "Quantity"])
+        if file and file.filename.endswith(".csv"):
+            stream = io.StringIO(file.stream.read().decode("utf-8"))
+            csv_reader = csv.DictReader(stream)
 
-    for item in data:
-        writer.writerow([item["component"], item["part"], item["qty"]])
+            for row in csv_reader:
+                # Convert quantity to int
+                qty = int(row.get("Quantity", 0))
 
-    mem = io.BytesIO()
-    mem.write(proxy.getvalue().encode("utf-8"))
-    mem.seek(0)
+                # Fake pricing – replace with Mouser API pricing
+                unit_price = round(qty * 0.072, 2) if qty else 0
+                total_price = round(unit_price * qty, 2)
 
-    return send_file(
-        mem,
-        as_attachment=True,
-        download_name="component_bom.csv",
-        mimetype="text/csv"
-    )
+                total_bom_cost += total_price
 
-@app.route("/mouser_price", methods=["POST"])
-def mouser_price():
-    part_number = request.json.get("partNumber")
+                bom_data.append({
+                    "PartNumber": row.get("PartNumber", ""),
+                    "Quantity": qty,
+                    "Manufacturer": row.get("Manufacturer", "None"),
+                    "Lifecycle": row.get("Lifecycle", "None"),
+                    "StockInfo": row.get("Stock", "None"),
+                    "UnitPrice": unit_price,
+                    "TotalPrice": total_price,
+                    "Alternates": row.get("Alternates", "None"),
+                    "Error": "None"
+                })
 
-    url = f"https://api.mouser.com/api/v1/search/partnumber?apiKey={MOUSER_API_KEY}"
-    payload = {
-        "SearchByPartRequest": {
-            "mouserPartNumber": part_number
-        }
-    }
+        return render_template("index.html",
+                               bom=bom_data,
+                               total_cost=round(total_bom_cost, 2))
 
-    try:
-        response = requests.post(url, json=payload)
-        return jsonify(response.json())
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    return render_template("index.html", bom=None, total_cost=None)
 
 
 if __name__ == "__main__":
