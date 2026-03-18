@@ -1,9 +1,10 @@
 # ============================================================
-# Mouser Client (FINAL VERSION)
+# Mouser Client (FINAL PRODUCTION VERSION)
 # ============================================================
-import requests, time, random, json
+import requests, time, random, json, os
 from typing import Any, Dict, List, Optional, Tuple
 
+# Retry / timeout constants
 MAX_RETRIES = 5
 TIMEOUT = 10
 BACKOFF_BASE = 1.5
@@ -11,7 +12,10 @@ BACKOFF_CAP = 4.0
 
 session = requests.Session()
 
-# Very lightweight global rate limiter (optional)
+
+# ------------------------------------------------------------
+# Lightweight API Rate Limiter
+# ------------------------------------------------------------
 class RateLimiter:
     def __init__(self, per_sec: float = 3):
         self.delay = 1.0 / per_sec
@@ -24,29 +28,34 @@ class RateLimiter:
             time.sleep(self.delay - diff)
         self.last_call = time.time()
 
-rate_limiter = RateLimiter(3)
+
+rate_limiter = RateLimiter(3)  # 3 requests per second
 
 
+# ============================================================
+# MouserClient
+# ============================================================
 class MouserClient:
     SEARCH_URL = "https://api.mouser.com/api/v1/search/partnumber"
 
     def __init__(self, api_key: Optional[str]):
+        # ✅ Ensure MOUSER_API_KEY is loaded correctly
         self.api_key = (api_key or "").strip()
 
-        # In-memory cache { mpn → (main_data, alternates, error) }
+        # ✅ In-memory cache to reduce API calls
+        # { mpn → (main_data, alternates, error) }
         self.cache: Dict[str, Tuple[
             Optional[Dict[str, Any]],
             List[str],
             Optional[str]
         ]] = {}
 
-    # ============================================================
-    # Internal helpers
-    # ============================================================
+    # --------------------------------------------------------
     def _backoff_sleep(self, attempt: int):
         delay = min(BACKOFF_CAP, (BACKOFF_BASE ** attempt)) + random.random() * 0.25
         time.sleep(delay)
 
+    # --------------------------------------------------------
     def _post_once(self, mpn: str) -> requests.Response:
         rate_limiter.wait()
         return session.post(
@@ -56,16 +65,15 @@ class MouserClient:
             timeout=TIMEOUT,
         )
 
-    # ============================================================
-    # Public API
-    # ============================================================
+    # --------------------------------------------------------
     def search_part(self, mpn: str) -> Tuple[
         Optional[Dict[str, Any]],
         List[str],
         Optional[str]
     ]:
         """
-        Returns tuple: (main_data, alternates, error)
+        Returns:
+            (main_data, alternates, error)
 
         main_data = {
             "price": str|None,
@@ -73,16 +81,17 @@ class MouserClient:
             "stock": str|None,
             "lifecycle": str|None
         }
-        alternates = [mpn1, mpn2, ...]
-        error = string or None
+        alternates = [ "ALT-XYZ", ... ]
+        error = "No results" | "Missing MOUSER_API_KEY" | "HTTP 403..." | None
         """
+
         key = (mpn or "").strip()
 
-        # ✅ Cache lookup
+        # ✅ Return cached result if available
         if key in self.cache:
             return self.cache[key]
 
-        # ✅ Missing API key
+        # ✅ If API KEY missing (your screenshot case)
         if not self.api_key:
             result = (None, [], "Missing MOUSER_API_KEY")
             self.cache[key] = result
@@ -90,10 +99,10 @@ class MouserClient:
 
         last_exc: Optional[Exception] = None
 
+        # ======================================================
+        # Retry loop
+        # ======================================================
         for attempt in range(1, MAX_RETRIES + 1):
-            # ======================================================
-            # Perform the POST request
-            # ======================================================
             try:
                 resp = self._post_once(key)
             except Exception as e:
@@ -101,9 +110,9 @@ class MouserClient:
                 self._backoff_sleep(attempt)
                 continue
 
-            # ======================================================
-            # GOOD RESPONSE (HTTP 200)
-            # ======================================================
+            # --------------------------------------------------
+            # ✅ Success (HTTP 200)
+            # --------------------------------------------------
             if resp.status_code == 200:
                 try:
                     data = resp.json()
@@ -114,15 +123,13 @@ class MouserClient:
 
                 parts = data.get("SearchResults", {}).get("Parts", []) or []
 
-                # ✅ No results found
+                # ✅ No results for MPN
                 if not parts:
                     result = (None, [], "No results")
                     self.cache[key] = result
                     return result
 
-                # ==================================================
-                # ✅ MAIN PART (FIRST RESULT)
-                # ==================================================
+                # ✅ MAIN PART (first part)
                 main = parts[0]
 
                 alternates = [
@@ -131,9 +138,11 @@ class MouserClient:
                     if p.get("ManufacturerPartNumber")
                 ]
 
-                # Correct pricing structure
                 price_breaks = main.get("PriceBreaks", []) or []
-                unit_price = price_breaks[0].get("Price") if price_breaks else None
+                unit_price = (
+                    price_breaks[0].get("Price")
+                    if price_breaks else None
+                )
 
                 main_data = {
                     "price": unit_price,
@@ -146,9 +155,9 @@ class MouserClient:
                 self.cache[key] = result
                 return result
 
-            # ======================================================
-            # HANDLE RATE-LIMIT OR TOO MANY REQUESTS
-            # ======================================================
+            # --------------------------------------------------
+            # ✅ Mouser rate-limiting (429, 403)
+            # --------------------------------------------------
             if resp.status_code in (403, 429):
                 try:
                     body = resp.json()
@@ -156,24 +165,24 @@ class MouserClient:
                     body = {}
 
                 err_list = body.get("Errors") or []
-                err_code = (err_list[0] or {}).get("Code") if err_list else None
+                code = (err_list[0] or {}).get("Code") if err_list else None
 
-                if err_code == "TooManyRequests":
+                if code == "TooManyRequests":
                     self._backoff_sleep(attempt)
                     continue
 
-            # ======================================================
-            # OTHER HTTP ERRORS
-            # ======================================================
-            err_snippet = (resp.text or "").strip()[:300]
-            result = (None, [], f"HTTP {resp.status_code}: {err_snippet}")
+            # --------------------------------------------------
+            # ✅ Other HTTP errors
+            # --------------------------------------------------
+            snippet = (resp.text or "").strip()[:300]
+            result = (None, [], f"HTTP {resp.status_code}: {snippet}")
             self.cache[key] = result
             return result
 
-        # ==========================================================
-        # EXHAUSTED RETRIES
-        # ==========================================================
-        if last_exc is not None:
+        # ======================================================
+        # If exhausted retries
+        # ======================================================
+        if last_exc:
             result = (None, [], f"Network error: {last_exc}")
             self.cache[key] = result
             return result
