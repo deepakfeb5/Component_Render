@@ -6,9 +6,8 @@ import os
 
 app = Flask(__name__)
 
-MOUSER_API_KEY = os.getenv("3f8661d7-e599-45f7-a572-72280fd2f09a", "")
+MOUSER_API_KEY = os.getenv("MOUSER_API_KEY", "")
 mouser = MouserClient(MOUSER_API_KEY)
-
 
 @app.route("/", methods=["GET", "POST"])
 def index():
