@@ -13,14 +13,19 @@ def index():
         file = request.files.get("csv_file")
 
         if file and file.filename.endswith(".csv"):
-            stream = io.StringIO(file.stream.read().decode("utf-8"))
+
+            # ✅ SAFE DECODING — fixes ±, μ, Ω, long descriptions
+            raw_bytes = file.read()
+            decoded_text = raw_bytes.decode("utf-8", errors="ignore")
+
+            stream = io.StringIO(decoded_text)
             csv_reader = csv.DictReader(stream)
 
             for row in csv_reader:
                 qty = int(row.get("Quantity", 0))
 
                 # Example placeholder pricing
-                unit_price = 0.72 if qty else 0
+                unit_price = 0.72
                 total_price = round(unit_price * qty, 2)
                 total_bom_cost += total_price
 
@@ -36,13 +41,11 @@ def index():
                     "Error": "None"
                 })
 
-            # ✅ store for exporting
-            request.session_data = bom_data
-
-        return render_template("index.html", bom=bom_data, total_cost=total_bom_cost)
+        return render_template("index.html",
+                               bom=bom_data,
+                               total_cost=total_bom_cost)
 
     return render_template("index.html", bom=None, total_cost=None)
-
 
 @app.route("/download_results_csv", methods=["POST"])
 def download_results_csv():
