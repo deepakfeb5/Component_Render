@@ -6,11 +6,13 @@ import os
 
 app = Flask(__name__)
 
+
 MOUSER_API_KEY = os.getenv("MOUSER_API_KEY", "")
 mouser = MouserClient(MOUSER_API_KEY)
 
 @app.route("/", methods=["GET", "POST"])
 def index():
+    return "Hello Flask!"
     bom_data = []
     total_bom_cost = 0
 
