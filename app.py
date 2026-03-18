@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, redirect
+from flask import Flask, render_template, request, redirect, send_file, jsonify
 import csv
 import io
 
@@ -17,13 +17,11 @@ def index():
             csv_reader = csv.DictReader(stream)
 
             for row in csv_reader:
-                # Convert quantity to int
                 qty = int(row.get("Quantity", 0))
 
-                # Fake pricing – replace with Mouser API pricing
-                unit_price = round(qty * 0.072, 2) if qty else 0
+                # Example placeholder pricing
+                unit_price = 0.72 if qty else 0
                 total_price = round(unit_price * qty, 2)
-
                 total_bom_cost += total_price
 
                 bom_data.append({
@@ -38,11 +36,48 @@ def index():
                     "Error": "None"
                 })
 
-        return render_template("index.html",
-                               bom=bom_data,
-                               total_cost=round(total_bom_cost, 2))
+            # ✅ store for exporting
+            request.session_data = bom_data
+
+        return render_template("index.html", bom=bom_data, total_cost=total_bom_cost)
 
     return render_template("index.html", bom=None, total_cost=None)
+
+
+@app.route("/download_results_csv", methods=["POST"])
+def download_results_csv():
+    bom_data = request.get_json().get("bom", [])
+
+    proxy = io.StringIO()
+    writer = csv.writer(proxy)
+    writer.writerow([
+        "Part Number", "Quantity", "Manufacturer", "Lifecycle",
+        "Stock Info", "Unit Price", "Total Price", "Alternates", "Error"
+    ])
+
+    for item in bom_data:
+        writer.writerow([
+            item["PartNumber"],
+            item["Quantity"],
+            item["Manufacturer"],
+            item["Lifecycle"],
+            item["StockInfo"],
+            item["UnitPrice"],
+            item["TotalPrice"],
+            item["Alternates"],
+            item["Error"]
+        ])
+
+    mem = io.BytesIO()
+    mem.write(proxy.getvalue().encode("utf-8"))
+    mem.seek(0)
+
+    return send_file(
+        mem,
+        as_attachment=True,
+        download_name="BOM_Results.csv",
+        mimetype="text/csv"
+    )
 
 
 if __name__ == "__main__":
