@@ -1,8 +1,13 @@
 from flask import Flask, render_template, request, send_file
 import csv
 import io
+from mouser_client import MouserClient
+import os
 
 app = Flask(__name__)
+
+MOUSER_API_KEY = os.getenv("MOUSER_API_KEY", "")
+mouser = MouserClient(MOUSER_API_KEY)
 
 
 @app.route("/", methods=["GET", "POST"])
@@ -15,7 +20,7 @@ def index():
 
         if file and file.filename.endswith(".csv"):
 
-            # ✅ SAFE DECODING (prevents Internal Server Error for ±, µ, Ω)
+            # ✅ Safe UTF‑8 decode (prevents ±, Ω errors)
             raw_bytes = file.read()
             decoded_text = raw_bytes.decode("utf-8", errors="ignore")
 
@@ -23,24 +28,34 @@ def index():
             csv_reader = csv.DictReader(stream)
 
             for row in csv_reader:
+                mpn = row.get("PartNumber", "").strip()
                 qty = int(row.get("Quantity", 0))
 
-                # ✅ Example placeholder pricing
-                unit_price = 0.72   # replace later with Mouser API unit price
+                # ✅ Call Mouser API (or cached)
+                main_data, alternates, error = mouser.search_part(mpn)
+
+                if main_data:
+                    price = main_data["price"] or "0"
+                    try:
+                        unit_price = float(price.replace("$", "").strip())
+                    except:
+                        unit_price = 0.0
+                else:
+                    unit_price = 0.0
+
                 total_price = round(unit_price * qty, 2)
                 total_bom_cost += total_price
 
-                # ✅ Populate Correct Fields (Same as your screenshot)
                 bom_data.append({
-                    "PartNumber": row.get("PartNumber", ""),
+                    "PartNumber": mpn,
                     "Quantity": qty,
-                    "Manufacturer": row.get("Manufacturer", "None"),
-                    "Lifecycle": row.get("Lifecycle", "None"),
-                    "StockInfo": row.get("StockInfo", "None"),
+                    "Manufacturer": (main_data or {}).get("manufacturer", "None"),
+                    "Lifecycle": (main_data or {}).get("lifecycle", "None"),
+                    "StockInfo": (main_data or {}).get("stock", "None"),
                     "UnitPrice": unit_price,
                     "TotalPrice": total_price,
-                    "Alternates": row.get("Alternates", "None"),
-                    "Error": row.get("Error", "None")  # "No results" appears here
+                    "Alternates": ", ".join(alternates) if alternates else "None",
+                    "Error": error or "None"
                 })
 
         return render_template("index.html",
@@ -54,7 +69,6 @@ def index():
 def download_results_csv():
     bom_data = request.get_json().get("bom", [])
 
-    # ✅ Build CSV in memory
     proxy = io.StringIO()
     writer = csv.writer(proxy)
     writer.writerow([
@@ -75,8 +89,7 @@ def download_results_csv():
             item["Error"]
         ])
 
-    mem = io.BytesIO()
-    mem.write(proxy.getvalue().encode("utf-8"))
+    mem = io.BytesIO(proxy.getvalue().encode("utf-8"))
     mem.seek(0)
 
     return send_file(
