@@ -1,8 +1,9 @@
-from flask import Flask, render_template, request, redirect, send_file, jsonify
+from flask import Flask, render_template, request, send_file
 import csv
 import io
 
 app = Flask(__name__)
+
 
 @app.route("/", methods=["GET", "POST"])
 def index():
@@ -14,7 +15,7 @@ def index():
 
         if file and file.filename.endswith(".csv"):
 
-            # ✅ SAFE DECODING — fixes ±, μ, Ω, long descriptions
+            # ✅ SAFE DECODING (prevents Internal Server Error for ±, µ, Ω)
             raw_bytes = file.read()
             decoded_text = raw_bytes.decode("utf-8", errors="ignore")
 
@@ -24,21 +25,22 @@ def index():
             for row in csv_reader:
                 qty = int(row.get("Quantity", 0))
 
-                # Example placeholder pricing
-                unit_price = 0.72
+                # ✅ Example placeholder pricing
+                unit_price = 0.72   # replace later with Mouser API unit price
                 total_price = round(unit_price * qty, 2)
                 total_bom_cost += total_price
 
+                # ✅ Populate Correct Fields (Same as your screenshot)
                 bom_data.append({
                     "PartNumber": row.get("PartNumber", ""),
                     "Quantity": qty,
                     "Manufacturer": row.get("Manufacturer", "None"),
                     "Lifecycle": row.get("Lifecycle", "None"),
-                    "StockInfo": row.get("Stock", "None"),
+                    "StockInfo": row.get("StockInfo", "None"),
                     "UnitPrice": unit_price,
                     "TotalPrice": total_price,
                     "Alternates": row.get("Alternates", "None"),
-                    "Error": "None"
+                    "Error": row.get("Error", "None")  # "No results" appears here
                 })
 
         return render_template("index.html",
@@ -47,10 +49,12 @@ def index():
 
     return render_template("index.html", bom=None, total_cost=None)
 
+
 @app.route("/download_results_csv", methods=["POST"])
 def download_results_csv():
     bom_data = request.get_json().get("bom", [])
 
+    # ✅ Build CSV in memory
     proxy = io.StringIO()
     writer = csv.writer(proxy)
     writer.writerow([
