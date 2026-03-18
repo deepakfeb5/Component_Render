@@ -1,4 +1,6 @@
 function downloadResultsCSV() {
+    const bom = window.bomData || [];
+
     fetch("/download_results_csv", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
